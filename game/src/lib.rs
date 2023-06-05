@@ -1,12 +1,24 @@
+use std::mem;
+
+use risc0_zkvm::sha::{Sha256, Digest, Impl};
 use serde::{Serialize, Deserialize};
 
 const CELL_COUNT: usize = 3;
 
-#[derive(Serialize, Deserialize)]
+// repr(C) allows us to interpret the struct as raw bytes
+// in the order that fields are defined in it.
+#[repr(C)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct TicTacToe {
     board: [[Cell; CELL_COUNT]; CELL_COUNT],
     previous: Player,
     state: State
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct VmResponse {
+    pub game: TicTacToe,
+    pub prev_state_hash: Digest
 }
 
 #[repr(u8)]
@@ -36,7 +48,8 @@ pub enum State {
     Winner(Player)
 }
 
-// Keeping this enum without payloads so that its size is a single byte.
+// Keeping this enum without payloads so that its size is a single byte
+// and to allow to easily transmute to a raw array of bytes.
 #[repr(u8)]
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 enum Cell {
@@ -58,6 +71,12 @@ impl TicTacToe {
             previous: Player::B,
             state: State::InProgress
         }
+    }
+
+    pub fn initial_hash() -> Digest {
+        let bytes = Self::new().as_bytes();
+
+        *Impl::hash_bytes(&bytes)
     }
 
     pub fn make_move(&mut self, point: Point) -> Result<(), MoveError> {
@@ -188,6 +207,18 @@ impl TicTacToe {
                 unsafe { std::str::from_utf8_unchecked(&row) }
             );
         }
+    }
+
+    pub fn as_bytes(&self) -> [
+        u8;
+        (CELL_COUNT * CELL_COUNT) +
+        mem::size_of::<Player>() +
+        mem::size_of::<State>()
+    ] {
+        // Assert that the struct contains no padding.
+        assert_eq!(mem::align_of::<TicTacToe>(), 1);
+
+        unsafe { mem::transmute(*self) }
     }
 }
 

@@ -3,12 +3,19 @@ use std::io::{self, Write};
 use methods::{MAKE_MOVE_ELF, MAKE_MOVE_ID};
 use risc0_zkvm::{
     serde::{from_slice, to_vec},
+    sha::{Sha256, Impl, Digest},
     Executor, ExecutorEnv, SessionReceipt
 };
-use game::{TicTacToe, State, Player, Point};
+use game::{TicTacToe, State, Player, Point, VmResponse};
 
 struct Server {
     game: TicTacToe
+}
+
+#[derive(Debug)]
+struct Client {
+    game_state: State,
+    state_hash: Digest
 }
 
 fn main() {
@@ -22,6 +29,9 @@ to fill the cell in the middle, they must provide the following input: \"1 1\".
     
     let mut server = Server::new();
 
+    let mut player_a = Client::new();
+    let mut player_b = Client::new();
+
     while let State::InProgress = server.game.state() {
         server.game.print_board();
 
@@ -33,7 +43,13 @@ to fill the cell in the middle, they must provide the following input: \"1 1\".
         io::stdout().flush().unwrap();
 
         let point = Server::wait_for_input();
-        server.game.make_move(point).unwrap();
+        let receipt = server.execute_move(point);
+
+        player_a.verify_receipt(&receipt);
+        player_b.verify_receipt(&receipt);
+
+        let resp: VmResponse = from_slice(&receipt.journal).unwrap();
+        server.game = resp.game;
     }
 
     match server.game.state() {
@@ -42,6 +58,9 @@ to fill the cell in the middle, they must provide the following input: \"1 1\".
         State::Winner(Player::B) => println!("Player 2 wins!"),
         State::InProgress => unreachable!()
     }
+
+    player_a.on_game_ended();
+    player_b.on_game_ended();
 }
 
 impl Server {
@@ -85,6 +104,36 @@ impl Server {
             println!("Bad input. Try again...");
             line.clear();
         }
+    }
+}
+
+impl Client {
+    pub fn new() -> Self {
+        Self {
+            state_hash: TicTacToe::initial_hash(),
+            game_state: State::InProgress
+        }
+    }
+
+    pub fn verify_receipt(&mut self, receipt: &SessionReceipt) {
+        assert_eq!(self.game_state, State::InProgress, "Game has already ended!");
+
+        receipt.verify(MAKE_MOVE_ID)
+            .expect("receipt verification failed");
+
+        let resp: VmResponse = from_slice(&receipt.journal).unwrap();
+        assert_eq!(self.state_hash, resp.prev_state_hash, "Game state hash mismatch!");
+
+        self.game_state = resp.game.state();
+        self.state_hash = *Impl::hash_bytes(&resp.game.as_bytes());
+    }
+
+    pub fn on_game_ended(self) {
+        assert_ne!(
+            self.game_state,
+            State::InProgress,
+            "Server signaled that the game has ended but the client state does not reflect that!"
+        );
     }
 }
 
