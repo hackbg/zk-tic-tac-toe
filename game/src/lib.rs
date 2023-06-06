@@ -245,3 +245,18 @@ impl Player {
         }
     }
 }
+
+impl std::fmt::Display for MoveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MoveError::PointOutOfBounds => write!(
+                f,
+                "Invalid cell coordinates. Must be between 0 0 and {} {}",
+                CELL_COUNT - 1 ,
+                CELL_COUNT - 1
+            ),
+            MoveError::CellOccupied => write!(f, "Cell is already occupied."),
+            MoveError::GameFinished => write!(f, "Game has already finished.")
+        }
+    }
+}

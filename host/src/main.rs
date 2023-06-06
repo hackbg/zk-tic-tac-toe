@@ -4,7 +4,7 @@ use methods::{MAKE_MOVE_ELF, MAKE_MOVE_ID};
 use risc0_zkvm::{
     serde::{from_slice, to_vec},
     sha::{Sha256, Impl, Digest},
-    Executor, ExecutorEnv, SessionReceipt
+    Executor, ExecutorEnv, SessionReceipt, Result
 };
 use game::{TicTacToe, State, Player, Point, VmResponse};
 
@@ -12,7 +12,6 @@ struct Server {
     game: TicTacToe
 }
 
-#[derive(Debug)]
 struct Client {
     game_state: State,
     state_hash: Digest
@@ -43,7 +42,14 @@ to fill the cell in the middle, they must provide the following input: \"1 1\".
         io::stdout().flush().unwrap();
 
         let point = Server::wait_for_input();
-        let receipt = server.execute_move(point);
+        let receipt = match server.execute_move(point) {
+            Ok(receipt) => receipt,
+            Err(error) => { 
+                println!("{error}\nTry again!");
+
+                continue;
+            }
+        };
 
         player_a.verify_receipt(&receipt);
         player_b.verify_receipt(&receipt);
@@ -70,16 +76,16 @@ impl Server {
         }
     }
 
-    pub fn execute_move(&self, point: Point) -> SessionReceipt {
+    pub fn execute_move(&self, point: Point) -> Result<SessionReceipt> {
         let env = ExecutorEnv::builder()
-            .add_input(&to_vec(&self.game).unwrap())
-            .add_input(&to_vec(&point).unwrap())
+            .add_input(&to_vec(&self.game)?)
+            .add_input(&to_vec(&point)?)
             .build();
 
-        let mut executor = Executor::from_elf(env, MAKE_MOVE_ELF).unwrap();
-        let session = executor.run().unwrap();
+        let mut executor = Executor::from_elf(env, MAKE_MOVE_ELF)?;
+        let session = executor.run()?;
 
-        session.prove().unwrap()
+        session.prove()
     }
 
     pub fn wait_for_input() -> Point {
@@ -139,4 +145,53 @@ impl Client {
 
 fn is_ascii_num(byte: u8) -> bool {
     byte >= 48 && byte <= 57
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic = "Game state hash mismatch!"]
+    fn server_cannot_manipulate_game_state() {
+        let mut server = Server::new();
+
+        let mut player_a = Client::new();
+        let mut player_b = Client::new();
+
+        let receipt = server.execute_move(Point::new(1, 1)).unwrap();
+
+        player_a.verify_receipt(&receipt);
+        player_b.verify_receipt(&receipt);
+
+        let resp: VmResponse = from_slice(&receipt.journal).unwrap();
+        server.game = resp.game;
+
+        server.game.make_move(Point::new(2, 1)).unwrap();
+
+        let receipt = server.execute_move(Point::new(0, 1)).unwrap();
+
+        player_a.verify_receipt(&receipt);
+    }
+
+    #[test]
+    #[should_panic = "Game state hash mismatch!"]
+    fn server_cannot_send_an_old_receipt() {
+        let mut server = Server::new();
+
+        let mut player_a = Client::new();
+        let mut player_b = Client::new();
+
+        let receipt = server.execute_move(Point::new(1, 1)).unwrap();
+
+        player_a.verify_receipt(&receipt);
+        player_b.verify_receipt(&receipt);
+
+        let resp: VmResponse = from_slice(&receipt.journal).unwrap();
+        server.game = resp.game;
+
+        server.execute_move(Point::new(0, 1)).unwrap();
+
+        player_a.verify_receipt(&receipt);
+    }
 }
